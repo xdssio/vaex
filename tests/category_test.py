@@ -39,6 +39,16 @@ def test_categorize():
 	assert ds0.category_labels(ds0.c) == ['a', 'b', 'c', 'd']
 	assert ds0.category_count(ds0.c) == 4
 
-# def test_plot_cat():
-# 	ds = vaex.from_arrays(colors=['red', 'green', 'blue', 'green'], counts=[4, ])
-# 	ds.categorize('colors', inplace=True)#, ['red', 'green'], inplace=True)
+def test_cat_missing_values():
+	colors = ['red', 'green', 'blue', 'green', 'MISSING']
+	mask   = [False, False,   False,   False,  True]
+	colors = np.ma.array(colors, mask=mask)
+
+	ds0 = vaex.from_arrays(colors=colors)
+	ds = ds0.label_encode('colors', ['red', 'green', 'blue'])
+	assert ds.count(binby=ds.colors, edges=True).tolist() == [1, 0, 1, 2, 1, 0]
+
+	# if we want missing values and non-categorized values to be reported seperately
+	# the following is expected
+	# ds = ds0.label_encode('colors', ['red', 'green'])
+	# assert ds.count(binby=ds.colors, edges=True).tolist() == [1, 0, 1, 2, 0, 1]

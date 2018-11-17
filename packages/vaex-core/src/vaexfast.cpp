@@ -1148,7 +1148,7 @@ void statisticNd(
             for(int d = 0; d < dimensions; d++) {
                 T value = endian(blocks[d][i]);
                 double scaled = (value - minima[d]) * scales[d];
-                if(scaled != scaled) { // nan check
+                if(custom_isnan(scaled)) { // nan check
                     index += count_strides[d] * 0; // nans are put at offset 0
                 } else
                 if(scaled < 0) { // smaller values are put at offset 1

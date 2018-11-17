@@ -565,11 +565,6 @@ class TaskStatistic(Task):
         masks = [np.ma.getmaskarray(block) for block in blocks if np.ma.isMaskedArray(block)]
         blocks = [block.data if np.ma.isMaskedArray(block) else block for block in blocks]
         mask = None
-        if masks:
-            mask = masks[0].copy()
-            for other in masks[1:]:
-                mask |= other
-            blocks = [block[~mask] for block in blocks]
 
         #blocks = [as_flat_float(block) for block in blocks]
         if len(blocks) != 0:
@@ -590,6 +585,15 @@ class TaskStatistic(Task):
             #print(dtype, statistic_function, histogram2d)
 
         blocks = [as_flat_array(block, dtype) for block in blocks]
+        if masks:
+            # replace all masked out values by nan, but make a copy so we do not modify
+            blocks = [k.copy() for k in blocks]
+            for block, mask in zip(blocks, masks):
+                block[mask] = np.nan
+            mask = masks[0].copy()
+            for other in masks[1:]:
+                mask |= other
+            blocks = [k.copy() for k in blocks]
 
         this_thread_grid = self.grid[thread_index]
         for i, selection in enumerate(self.selections):
@@ -597,8 +601,6 @@ class TaskStatistic(Task):
                 selection_mask = self.dataset.evaluate_selection_mask(selection, i1=i1, i2=i2, cache=True)  # TODO
                 if selection_mask is None:
                     raise ValueError("performing operation on selection while no selection present")
-                if mask is not None:
-                    selection_mask = selection_mask[~mask]
                 selection_blocks = [block[selection_mask] for block in blocks]
             else:
                 selection_blocks = [block for block in blocks]
@@ -4943,7 +4945,7 @@ class DatasetLocal(Dataset):
         if check:
             vmin, vmax = self.minmax(column)
             if labels is None:
-                N = int(vmax - vmin + 1)
+                N = int(vmax + 1)
                 labels = list(map(str, range(N)))
             if (vmax - vmin) >= len(labels):
                 raise ValueError('value of {} found, which is larger than number of labels {}'.format(vmax, len(labels)))
@@ -4957,11 +4959,16 @@ class DatasetLocal(Dataset):
         """
         column = _ensure_string_from_expression(column)
         ds = self if inplace else self.copy()
+        # codes point to the index of found_values
+        # meaning: found_values[codes[0]] == ds[column].values[0]
         found_values, codes = ds.unique(column, return_inverse=True)
         if values is None:
             values = found_values
         else:
+            # we have specified which values we should support, anything
+            # not found will be masked
             translation = np.zeros(len(found_values), dtype=np.uint64)
+            # mark values that are in the column, but not in values with a special value
             missing_value = len(found_values)
             for i, found_value in enumerate(found_values):
                 try:
@@ -4974,7 +4981,8 @@ class DatasetLocal(Dataset):
                     translation[i] = values.index(found_value)
             codes = translation[codes]
             if missing_value in translation:
-                codes = np.ma.masked_array(codes, codes==missing_value)
+                # all special values will be marked as missing
+                codes = np.ma.masked_array(codes, mask=codes==missing_value)
 
         original_column = ds.rename_column(column, '__original_' + column, unique=True)
         labels = [str(k) for k in values]
