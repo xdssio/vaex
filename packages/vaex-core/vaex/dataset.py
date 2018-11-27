@@ -306,13 +306,15 @@ class TaskBase(Task):
 
 
 class TaskMapReduce(Task):
-    def __init__(self, dataset, expressions, map, reduce, converter=lambda x: x, info=False, to_float=False, name="task"):
+    def __init__(self, dataset, expressions, map, reduce, converter=lambda x: x, info=False, to_float=False,
+                    ordered_reduce=False, name="task"):
         Task.__init__(self, dataset, expressions, name=name)
         self._map = map
         self._reduce = reduce
         self.converter = converter
         self.info = info
         self.to_float = to_float
+        self.ordered_reduce = ordered_reduce
 
     def map(self, thread_index, i1, i2, *blocks):
         if self.to_float:
@@ -323,6 +325,9 @@ class TaskMapReduce(Task):
             return self._map(*blocks)  # [self.map(block) for block in blocks]
 
     def reduce(self, results):
+        if self.ordered_reduce:
+            results.sort(key=lambda x: x[0])
+            results = [k[1] for k in results]
         return self.converter(reduce(self._reduce, results))
 
 
@@ -1283,9 +1288,9 @@ class Dataset(object):
     def filtered(self):
         return self.has_selection(FILTER_SELECTION_NAME)
 
-    def map_reduce(self, map, reduce, arguments, progress=False, delay=False, name='map reduce (custom)'):
+    def map_reduce(self, map, reduce, arguments, progress=False, delay=False, info=False, ordered_reduce=False, name='map reduce (custom)'):
         # def map_wrapper(*blocks):
-        task = TaskMapReduce(self, arguments, map, reduce, info=False)
+        task = TaskMapReduce(self, arguments, map, reduce, info=info, ordered_reduce=ordered_reduce)
         progressbar = vaex.utils.progressbars(progress)
         progressbar.add_task(task, name)
         self.executor.schedule(task)
@@ -1305,15 +1310,28 @@ class Dataset(object):
         return lazy_function(*arguments)
 
     def unique(self, expression, return_inverse=False, progress=False, delay=False):
-        def map(ar):  # this will be called with a chunk of the data
-            return np.unique(ar)  # returns the unique elements
-
-        def reduce(a, b):  # gets called with a list of the return values of map
-            joined = np.concatenate([a, b])  # put all 'sub-unique' together
-            return np.unique(joined)  # find all the unique items
-        if return_inverse:  # TODO: optimize this path
-            return np.unique(self.evaluate(expression), return_inverse=return_inverse)
+        expression = _ensure_string_from_expression(expression)
+        if return_inverse:
+            def map(thread_index, i1, i2, ar):  # this will be called with a chunk of the data
+                return i1, (np.unique(ar, return_inverse=True))  # returns (sort key, (unique elements, indices))
+            def reduce(a, b):  # gets called with a list of the return values of map
+                uniques_a, indices_a = a
+                uniques_b, indices_b = b
+                Na = len(uniques_a)
+                Nb = len(uniques_b)
+                joined = np.concatenate([uniques_a, uniques_b])  # put all 'sub-unique' together
+                uniques, indices_joined = np.unique(joined, return_inverse=True)  # find all the unique items
+                # get back the merged indices
+                indices = np.concatenate([indices_joined[:Na][indices_a], indices_joined[Na:][indices_b]])
+                return uniques, indices
+            return self.map_reduce(map, reduce, [expression], delay=delay, progress=progress, info=True, ordered_reduce=True, name='unique')
+            # return np.unique(self.evaluate(expression), return_inverse=return_inverse)
         else:
+            def map(ar):  # this will be called with a chunk of the data
+                return np.unique(ar)  # returns the unique elements
+            def reduce(a, b):  # gets called with a list of the return values of map
+                joined = np.concatenate([a, b])  # put all 'sub-unique' together
+                return np.unique(joined)  # find all the unique items
             return self.map_reduce(map, reduce, [expression], delay=delay, progress=progress, name='unique')
 
     @docsubst
