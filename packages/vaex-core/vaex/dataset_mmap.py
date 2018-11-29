@@ -20,7 +20,6 @@ import vaex.dataset
 import vaex.file
 from vaex.expression import Expression
 import struct
-import fcntl
 
 logger = logging.getLogger("vaex.file")
 
@@ -42,6 +41,7 @@ if no_mmap:
     libc = cdll.LoadLibrary("libc.dylib")
     import ctypes
     import io
+    import fcntl
 
     from cachetools import LRUCache
     import threading
